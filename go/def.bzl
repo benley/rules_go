@@ -485,16 +485,31 @@ def go_test_impl(ctx):
     importmap=importmap,
     transitive_libs=lib_result.transitive_go_library_object,
     cgo_deps=lib_result.transitive_cgo_deps,
-    lib=ctx.outputs.main_lib, executable=ctx.outputs.executable,
+    lib=ctx.outputs.main_lib,
+    executable=ctx.outputs.real_bin,
     x_defs=ctx.attr.x_defs)
+
+  ctx.template_action(
+    template = ctx.file._runner_template,
+    output = ctx.outputs.executable,
+    executable = True,
+    substitutions = {
+      "%real_bin%": ctx.outputs.real_bin.short_path,
+      "%go2xunit%": ctx.executable._go2xunit.short_path,
+      "%suite_prefix%": str(ctx.label),
+    })
 
   # TODO(bazel-team): the Go tests should do a chdir to the directory
   # holding the data files, so open-source go tests continue to work
   # without code changes.
-  runfiles = ctx.runfiles(collect_data = True,
-                          files = (ctx.files.data + [ctx.outputs.executable] +
-                                   list(lib_result.runfiles.files)))
-  return struct(runfiles=runfiles)
+  runfiles = ctx.runfiles(
+      collect_data = True,
+      files = (ctx.files.data +
+               [ctx.outputs.executable,
+                ctx.outputs.real_bin,
+                ctx.executable._go2xunit] +
+               list(lib_result.runfiles.files)))
+  return struct(runfiles = runfiles)
 
 go_env_attrs = {
     "toolchain": attr.label(
@@ -588,6 +603,17 @@ go_test = rule(
             cfg = HOST_CFG,
         ),
         "x_defs": attr.string_dict(),
+        "_go2xunit": attr.label(
+            executable = True,
+            default = Label("@com_github_tebeka_go2xunit//:go2xunit"),
+            allow_files = True,
+        ),
+        "_runner_template": attr.label(
+            executable = True,
+            default = Label("//go:testrunner_template.sh"),
+            allow_files = True,
+            single_file = True,
+        ),
     },
     executable = True,
     fragments = ["cpp"],
@@ -595,6 +621,7 @@ go_test = rule(
         "lib": "%{name}.a",
         "main_lib": "%{name}_main_test.a",
         "main_go": "%{name}_main_test.go",
+        "real_bin": "%{name}.real",
     },
     test = True,
 )
@@ -1038,6 +1065,23 @@ _go_repository_select = repository_rule(
     },
 )
 
+GO2XUNIT_BUILD_FILE = """
+load("@//go:def.bzl", "go_prefix", "go_binary")
+
+go_prefix("github.com/tebeka/go2xunit")
+
+go_binary(
+    name = "go2xunit",
+    srcs = [
+      "go2xunit.go",
+      "parsers.go",
+      "cmdline.go",
+      "xmlout.go",
+    ],
+    visibility = ["//visibility:public"],
+)
+"""
+
 def go_repositories():
   native.new_http_archive(
       name =  "golang_linux_amd64",
@@ -1057,4 +1101,11 @@ def go_repositories():
 
   _go_repository_select(
       name = "io_bazel_rules_go_toolchain",
+  )
+
+  native.new_git_repository(
+      name = "com_github_tebeka_go2xunit",
+      build_file_content = GO2XUNIT_BUILD_FILE,
+      remote = "https://github.com/benley/go2xunit",
+      commit = "5b8fdd3a3520a032f26d320f6791826ddb46c9d5",
   )
